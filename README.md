@@ -16,9 +16,24 @@ In addition to all the original brightness control features, this fork adds:
 
 ## Installation
 
-Same as the original extension - this uses `ddcutil` as the backend for DDC/CI communication.
+### Step 1: Install the Extension
 
-### Prerequisites
+Clone this repository into your GNOME Shell extensions directory:
+
+```bash
+git clone https://github.com/varunbpatil/display-brightness-ddcutil.git ~/.local/share/gnome-shell/extensions/display-brightness-ddcutil@varunbpatil
+```
+
+Then compile the settings schema:
+
+```bash
+cd ~/.local/share/gnome-shell/extensions/display-brightness-ddcutil@varunbpatil
+glib-compile-schemas schemas/
+```
+
+### Step 2: Install ddcutil
+
+This extension uses `ddcutil` as the backend for DDC/CI communication.
 
 1. Install ddcutil:
    ```bash
@@ -47,7 +62,13 @@ Same as the original extension - this uses `ddcutil` as the backend for DDC/CI c
    echo "i2c-dev" | sudo tee /etc/modules-load.d/i2c-dev.conf
    ```
 
-For detailed setup instructions, see the [original repository](https://github.com/daitj/gnome-display-brightness-ddcutil).
+### Step 3: Enable the Extension
+
+1. Log out and log back in (or restart GNOME Shell with `Alt+F2`, type `r`, and press Enter)
+2. Open GNOME Extensions (or Extensions app)
+3. Enable "Brightness control using ddcutil"
+
+For detailed ddcutil setup and troubleshooting, see the [original repository](https://github.com/daitj/gnome-display-brightness-ddcutil).
 
 ## Contrast Control Settings
 
