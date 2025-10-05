@@ -36,6 +36,8 @@ const QuickSettingsPanelMenuButton = Main.panel.statusArea.quickSettings;
 const {
     StatusAreaBrightnessMenu,
     SystemMenuBrightnessMenu,
+    StatusAreaContrastMenu,
+    SystemMenuContrastMenu,
     SingleMonitorSliderAndValueForStatusAreaMenu,
     SingleMonitorSliderAndValueForQuickSettings,
     SingleMonitorSliderAndValueForQuickSettingsSubMenu,
@@ -54,6 +56,7 @@ const {
 const minBrightness = 1;
 let displays = null;
 let mainMenuButton = null;
+let contrastMenuButton = null;
 let writeCollection = null;
 let _reloadMenuWidgetsTimer = null;
 let _reloadExtensionTimer = null;
@@ -102,10 +105,24 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
                 brightnessLog(this.settings, 'Adding to panel');
                 mainMenuButton = new StatusAreaBrightnessMenu(this.settings);
                 Main.panel.addToStatusArea('DDCUtilBrightnessSlider', mainMenuButton, 0, 'right');
+
+                // Add contrast indicator if enabled
+                if (this.settings.get_boolean('show-contrast-indicator')) {
+                    contrastMenuButton = new StatusAreaContrastMenu(this.settings);
+                    Main.panel.addToStatusArea('DDCUtilContrastSlider', contrastMenuButton, 1, 'right');
+                    this.connectContrastIndicatorSignals();
+                }
             } else {
                 brightnessLog(this.settings, 'Adding to system menu');
                 mainMenuButton = new SystemMenuBrightnessMenu(this.settings);
                 QuickSettingsPanelMenuButton._indicators.insert_child_at_index(mainMenuButton, this.settings.get_double('position-system-indicator'));
+
+                // Add contrast indicator if enabled
+                if (this.settings.get_boolean('show-contrast-indicator')) {
+                    contrastMenuButton = new SystemMenuContrastMenu(this.settings);
+                    QuickSettingsPanelMenuButton._indicators.insert_child_at_index(contrastMenuButton, this.settings.get_double('position-system-indicator') + 1);
+                    this.connectContrastIndicatorSignals();
+                }
             }
             if (mainMenuButton !== null) {
                 /* connect all signals */
@@ -149,9 +166,50 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
             /* clear variables */
             mainMenuButton.destroy();
             mainMenuButton = null;
+
+            if (contrastMenuButton !== null) {
+                contrastMenuButton.destroy();
+                contrastMenuButton = null;
+            }
+
             displays = null;
             writeCollection = null;
         }
+    }
+
+    connectContrastIndicatorSignals() {
+        if (contrastMenuButton !== null) {
+            brightnessLog(this.settings, 'Connecting contrast indicator signals');
+            contrastMenuButton.connect('value-up', (actor, stepChange) => {
+                brightnessLog(this.settings, `Contrast value-up signal received: ${stepChange}`);
+                this.adjustAllContrast(stepChange);
+                return Clutter.EVENT_STOP;
+            });
+            contrastMenuButton.connect('value-down', (actor, stepChange) => {
+                brightnessLog(this.settings, `Contrast value-down signal received: ${stepChange}`);
+                this.adjustAllContrast(-stepChange);
+                return Clutter.EVENT_STOP;
+            });
+        }
+    }
+
+    adjustAllContrast(stepChange) {
+        brightnessLog(this.settings, `adjustAllContrast called with stepChange: ${stepChange}`);
+        if (!this.settings.get_boolean('show-contrast-sliders')) {
+            brightnessLog(this.settings, 'Contrast sliders not enabled, skipping');
+            return;
+        }
+        displays.forEach(display => {
+            if (display.bus !== 'internal' && display.contrastSlider) {
+                brightnessLog(this.settings, `Adjusting contrast for display: ${display.name}`);
+                const currentSliderValue = display.contrastSlider.ValueSlider ? display.contrastSlider.ValueSlider.value : display.contrastSlider.slider.value;
+                const newSliderValue = Math.min(1, Math.max(0, currentSliderValue + stepChange));
+                const range = display.maxContrast - display.minContrast;
+                const newActualValue = display.minContrast + newSliderValue * range;
+                this.setContrast(display, newActualValue);
+                display.contrastSlider.changeValue(newSliderValue * 100);
+            }
+        });
     }
 
     ddcWriteInQueue(displayBus) {
@@ -221,6 +279,28 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
             85 ms waiting after write to i2c controller,
             check #74 for details
         */
+
+        this.ddcWriteCollector(display.bus, writer);
+    }
+
+    setContrast(display, newValue) {
+        if (display.bus === 'internal') {
+            // Internal displays typically don't support contrast control via DDC
+            return;
+        }
+        // newValue is already in the actual contrast range (minContrast to maxContrast)
+        let newContrast = parseInt(newValue);
+        const ddcutilPath = this.settings.get_string('ddcutil-binary-path');
+        const ddcutilAdditionalArgs = this.settings.get_string('ddcutil-additional-args');
+        const sleepMultiplier = this.settings.get_double('ddcutil-sleep-multiplier') / 40;
+        const writer = () => {
+            brightnessLog(this.settings, `async ${ddcutilPath} setvcp 12 ${newContrast} --bus ${display.bus} --sleep-multiplier ${sleepMultiplier} ${ddcutilAdditionalArgs}`);
+            GLib.spawn_command_line_async(`${ddcutilPath} setvcp 12 ${newContrast} --bus ${display.bus} --sleep-multiplier ${sleepMultiplier} ${ddcutilAdditionalArgs}`);
+        };
+        // Update the normalized value for the slider
+        const range = display.maxContrast - display.minContrast;
+        display.currentContrast = (newContrast - display.minContrast) / range;
+        brightnessLog(this.settings, `display ${display.name}, setting contrast to ${newContrast} (range: ${display.minContrast}-${display.maxContrast}), normalized: ${display.currentContrast}`);
 
         this.ddcWriteCollector(display.bus, writer);
     }
@@ -394,6 +474,54 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
         /* save slider in main menu, so that it can be accessed easily for different events */
         if (!this.settings.get_boolean('show-all-slider'))
             mainMenuButton.storeSliderForEvents(displaySlider);
+
+        /* Add contrast slider if enabled and display is external */
+        if (this.settings.get_boolean('show-contrast-sliders') && display.bus !== 'internal') {
+            this.addContrastSliderToPanel(display);
+        }
+    }
+
+    addContrastSliderToPanel(display) {
+        const onContrastSliderChange = (quickSettingsSlider, newValue) => {
+            this.setContrast(display, newValue);
+        };
+        let contrastSlider = null;
+        const contrastDisplayName = `${display.name} (Contrast)`;
+        const minContrast = display.minContrast;
+        const maxContrast = display.maxContrast;
+
+        if (this.settings.get_int('button-location') === 0) {
+            contrastSlider = new SingleMonitorSliderAndValueForStatusAreaMenu(this.settings, contrastDisplayName, display.currentContrast, onContrastSliderChange, minContrast, maxContrast);
+        } else if (this.settings.get_boolean('show-sliders-in-submenu')) {
+            contrastSlider = new SingleMonitorSliderAndValueForQuickSettingsSubMenu({
+                settings: this.settings,
+                'display-name': contrastDisplayName,
+                'current-value': display.currentContrast,
+                'icon-name': 'preferences-color-symbolic',
+                'min-value': minContrast,
+                'max-value': maxContrast
+            });
+            contrastSlider.connect('slider-change', onContrastSliderChange);
+        } else {
+            contrastSlider = new SingleMonitorSliderAndValueForQuickSettings({
+                settings: this.settings,
+                'display-name': contrastDisplayName,
+                'current-value': display.currentContrast,
+                'icon-name': 'preferences-color-symbolic',
+                'min-value': minContrast,
+                'max-value': maxContrast
+            });
+            contrastSlider.connect('slider-change', onContrastSliderChange);
+        }
+
+        display.contrastSlider = contrastSlider;
+        // Use the same conditional logic as brightness slider
+        if (!(this.settings.get_boolean('show-all-slider') && this.settings.get_boolean('only-all-slider')))
+            if (this.settings.get_boolean('show-sliders-in-submenu') && this.settings.get_boolean('show-all-slider')) {
+                mainMenuButton.getStoredSliders()[0].menu.addMenuItem(contrastSlider)
+            } else {
+                mainMenuButton.addMenuItem(contrastSlider);
+            }
     }
 
     /*
@@ -428,8 +556,13 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
 
         if (displays.length === 0) {
             mainMenuButton.indicatorVisibility(false);
+            if (contrastMenuButton) contrastMenuButton.indicatorVisibility(false);
         } else {
             mainMenuButton.indicatorVisibility(true);
+            if (contrastMenuButton) {
+                const hasContrastSliders = displays.some(d => d.bus !== 'internal' && this.settings.get_boolean('show-contrast-sliders'));
+                contrastMenuButton.indicatorVisibility(hasContrastSliders);
+            }
             if (this.settings.get_boolean('show-all-slider'))
                 this.addAllSlider();
 
@@ -453,6 +586,7 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
                     but we want custom positioning, this is bit of a hack to access
                     _grid (St.Widget) directly and add items there,
                 */
+                let position = this.settings.get_double('position-system-menu');
                 mainMenuButton.quickSettingsItems.forEach(item => {
                     /*
                         also for Label and Name we are accessing slider's parent's parent
@@ -462,10 +596,12 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
                     if (this.settings.get_boolean('show-display-name'))
                         _box.insert_child_at_index(item.NameContainer, 1);
 
-                    _grid.insert_child_at_index(item, this.settings.get_double('position-system-menu'));
+                    _grid.insert_child_at_index(item, position);
                     QuickSettingsPanelMenuButton.menu._completeAddItem(item, 2);
                     if (this.settings.get_boolean('show-value-label'))
                         _box.insert_child_at_index(item.ValueLabel, 3);
+
+                    position++; // Increment position for next item
                 });
             }
         }
@@ -553,12 +689,105 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
         /* we need current brightness in the scale of 0 to 1 for slider*/
         const currentBrightness = ddcutilResponseArray[3] / ddcutilResponseArray[4];
         /* make display object */
-        display = { 'bus': displayBus, 'max': maxBrightness, 'current': currentBrightness, 'name': displayNames[displayId], 'vcp': vcp };
+        display = {
+            'bus': displayBus,
+            'max': maxBrightness,
+            'current': currentBrightness,
+            'name': displayNames[displayId],
+            'vcp': vcp,
+            'minContrast': 0,
+            'maxContrast': 100,
+            'currentContrast': 0.5
+        };
         brightnessLog(this.settings, `added display to list ${JSON.stringify(display)}`);
         displays.push(display);
 
+        /* Fetch contrast value if contrast sliders are enabled */
+        if (this.settings.get_boolean('show-contrast-sliders') && this.settings.get_boolean('vcp-12')) {
+            this.getContrastValue(display, displayBus);
+        }
+
         /* cheap way of reloading all display slider in the panel */
         this.reloadMenuWidgets();
+    }
+
+    getContrastValue(display, displayBus) {
+        brightnessLog(this.settings, `fetching contrast value for bus ${displayBus}`);
+        spawnWithCallback(this.settings, this.ddcutilCommandLine('12', displayBus), ddcutilResponse => {
+            brightnessLog(this.settings, `ddcutil getvcp 12 for bus ${displayBus} is : ${ddcutilResponse}`);
+            if (this.displayValidate(ddcutilResponse) && !this.displayResponseError(ddcutilResponse)) {
+                const ddcutilResponseArray = getVCPInfoAsArray(ddcutilResponse);
+                brightnessLog(this.settings, `contrast response array length: ${ddcutilResponseArray.length}, contents: ${JSON.stringify(ddcutilResponseArray)}`);
+
+                if (ddcutilResponseArray.length >= 6) {
+                    // Format: VCP 12 C current min max (6 elements)
+                    const currentValue = parseInt(ddcutilResponseArray[3]);
+                    const minValue = parseInt(ddcutilResponseArray[4]);
+                    const maxValue = parseInt(ddcutilResponseArray[5]);
+                    display.minContrast = minValue;
+                    display.maxContrast = maxValue;
+                    const range = maxValue - minValue;
+                    display.currentContrast = (currentValue - minValue) / range;
+                    brightnessLog(this.settings, `contrast for ${display.name}: current=${currentValue}, min=${minValue}, max=${maxValue}, normalized=${display.currentContrast}`);
+                    this.reloadMenuWidgets();
+                } else if (ddcutilResponseArray.length >= 5) {
+                    // Format: VCP 12 C current max (5 elements)
+                    const currentValue = parseInt(ddcutilResponseArray[3]);
+                    const maxValue = parseInt(ddcutilResponseArray[4]);
+
+                    // Check if auto-detection is enabled
+                    if (this.settings.get_boolean('contrast-auto-detect-min')) {
+                        // Detect minimum by setting to 0 and reading back
+                        this.detectContrastMinimum(display, displayBus, currentValue, maxValue);
+                    } else {
+                        // Use manual minimum value from settings
+                        const minValue = parseInt(this.settings.get_double('contrast-manual-min'));
+                        display.minContrast = minValue;
+                        display.maxContrast = maxValue;
+                        const range = maxValue - minValue;
+                        display.currentContrast = (currentValue - minValue) / range;
+                        brightnessLog(this.settings, `contrast for ${display.name}: current=${currentValue}, min=${minValue} (manual), max=${maxValue}, normalized=${display.currentContrast}`);
+                        this.reloadMenuWidgets();
+                    }
+                }
+            }
+        });
+    }
+
+    detectContrastMinimum(display, displayBus, originalValue, maxValue) {
+        const ddcutilPath = this.settings.get_string('ddcutil-binary-path');
+        const sleepMultiplier = this.settings.get_double('ddcutil-sleep-multiplier') / 40;
+
+        brightnessLog(this.settings, `detecting minimum contrast for ${display.name}, setting to 0 temporarily`);
+
+        // Set contrast to 0 to find the actual minimum
+        spawnWithCallback(this.settings, [ddcutilPath, 'setvcp', '12', '0', '--bus', displayBus, '--sleep-multiplier', sleepMultiplier.toString()], () => {
+            // Wait a bit for the change to take effect, then read the value
+            setTimeout(() => {
+                spawnWithCallback(this.settings, this.ddcutilCommandLine('12', displayBus), ddcutilResponse => {
+                    if (this.displayValidate(ddcutilResponse) && !this.displayResponseError(ddcutilResponse)) {
+                        const ddcutilResponseArray = getVCPInfoAsArray(ddcutilResponse);
+                        if (ddcutilResponseArray.length >= 5) {
+                            const minValue = parseInt(ddcutilResponseArray[3]); // This is the clamped minimum
+                            display.minContrast = minValue;
+                            display.maxContrast = maxValue;
+
+                            brightnessLog(this.settings, `detected minimum contrast for ${display.name}: ${minValue}, restoring to ${originalValue}`);
+
+                            // Restore the original value
+                            const restoreValue = originalValue;
+                            spawnWithCallback(this.settings, [ddcutilPath, 'setvcp', '12', restoreValue.toString(), '--bus', displayBus, '--sleep-multiplier', sleepMultiplier.toString()], () => {
+                                // Now calculate the normalized value
+                                const range = maxValue - minValue;
+                                display.currentContrast = (originalValue - minValue) / range;
+                                brightnessLog(this.settings, `contrast for ${display.name}: current=${originalValue}, min=${minValue}, max=${maxValue}, normalized=${display.currentContrast}`);
+                                this.reloadMenuWidgets();
+                            });
+                        }
+                    }
+                });
+            }, 200); // Wait 200ms for the value to be set
+        });
     }
 
     ddcutilCommandLine(vcp, displayBus) {
@@ -668,16 +897,21 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
     settingsToJSObject() {
         const out = {
             'allow-zero-brightness': this.settings.get_boolean('allow-zero-brightness'),
+            'contrast-auto-detect-min': this.settings.get_boolean('contrast-auto-detect-min'),
             'disable-display-state-check': this.settings.get_boolean('disable-display-state-check'),
             'hide-system-indicator': this.settings.get_boolean('hide-system-indicator'),
             'only-all-slider': this.settings.get_boolean('only-all-slider'),
             'show-all-slider': this.settings.get_boolean('show-all-slider'),
+            'show-contrast-sliders': this.settings.get_boolean('show-contrast-sliders'),
+            'show-contrast-indicator': this.settings.get_boolean('show-contrast-indicator'),
             'show-display-name': this.settings.get_boolean('show-display-name'),
             'show-value-label': this.settings.get_boolean('show-value-label'),
             'show-sliders-in-submenu': this.settings.get_boolean('show-sliders-in-submenu'),
             'vcp-6b': this.settings.get_boolean('vcp-6b'),
             'vcp-10': this.settings.get_boolean('vcp-10'),
+            'vcp-12': this.settings.get_boolean('vcp-12'),
             'verbose-debugging': this.settings.get_boolean('verbose-debugging'),
+            'contrast-manual-min': this.settings.get_double('contrast-manual-min'),
             'ddcutil-queue-ms': this.settings.get_double('ddcutil-queue-ms'),
             'ddcutil-sleep-multiplier': this.settings.get_double('ddcutil-sleep-multiplier'),
             'position-system-indicator': this.settings.get_double('position-system-indicator'),
@@ -688,6 +922,8 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
             'ddcutil-binary-path': this.settings.get_string('ddcutil-binary-path'),
             'decrease-brightness-shortcut': this.settings.get_strv('decrease-brightness-shortcut'),
             'increase-brightness-shortcut': this.settings.get_strv('increase-brightness-shortcut'),
+            'decrease-contrast-shortcut': this.settings.get_strv('decrease-contrast-shortcut'),
+            'increase-contrast-shortcut': this.settings.get_strv('increase-contrast-shortcut'),
         };
         return out;
     }
@@ -740,6 +976,21 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
                 this.reloadExtension();
             }),
             vcp10: this.settings.connect('changed::vcp-10', () => {
+                this.reloadExtension();
+            }),
+            vcp12: this.settings.connect('changed::vcp-12', () => {
+                this.reloadExtension();
+            }),
+            show_contrast_sliders: this.settings.connect('changed::show-contrast-sliders', () => {
+                this.reloadExtension();
+            }),
+            show_contrast_indicator: this.settings.connect('changed::show-contrast-indicator', () => {
+                this.reloadExtension();
+            }),
+            contrast_auto_detect_min: this.settings.connect('changed::contrast-auto-detect-min', () => {
+                this.reloadExtension();
+            }),
+            contrast_manual_min: this.settings.connect('changed::contrast-manual-min', () => {
                 this.reloadExtension();
             }),
             indicator: this.settings.connect('changed::button-location', () => {
@@ -802,6 +1053,40 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
         mainMenuButton.emit('value-down');
     }
 
+    increaseContrast() {
+        brightnessLog(this.settings, 'Increase contrast');
+        const stepChangePercent = this.settings.get_double('step-change-keyboard') / 100;
+        displays.forEach(display => {
+            if (display.bus !== 'internal' && display.contrastSlider) {
+                const currentSliderValue = display.contrastSlider.ValueSlider.value;
+                const newSliderValue = Math.min(1, currentSliderValue + stepChangePercent);
+                // Convert to actual contrast value for display
+                const range = display.maxContrast - display.minContrast;
+                const newActualValue = display.minContrast + newSliderValue * range;
+                display.contrastSlider.setShowOSD();
+                display.contrastSlider.changeValue(newSliderValue * 100);
+                display.contrastSlider.resetOSD();
+            }
+        });
+    }
+
+    decreaseContrast() {
+        brightnessLog(this.settings, 'Decrease contrast');
+        const stepChangePercent = this.settings.get_double('step-change-keyboard') / 100;
+        displays.forEach(display => {
+            if (display.bus !== 'internal' && display.contrastSlider) {
+                const currentSliderValue = display.contrastSlider.ValueSlider.value;
+                const newSliderValue = Math.max(0, currentSliderValue - stepChangePercent);
+                // Convert to actual contrast value for display
+                const range = display.maxContrast - display.minContrast;
+                const newActualValue = display.minContrast + newSliderValue * range;
+                display.contrastSlider.setShowOSD();
+                display.contrastSlider.changeValue(newSliderValue * 100);
+                display.contrastSlider.resetOSD();
+            }
+        });
+    }
+
     addKeyboardShortcuts() {
         brightnessLog(this.settings, 'Add keyboard shortcuts');
         Main.wm.addKeybinding(
@@ -818,11 +1103,27 @@ export default class DDCUtilBrightnessControlExtension extends Extension {
             Shell.ActionMode.ALL,
             this.decrease.bind(this)
         );
+        Main.wm.addKeybinding(
+            'increase-contrast-shortcut',
+            this.settings,
+            Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.ALL,
+            this.increaseContrast.bind(this)
+        );
+        Main.wm.addKeybinding(
+            'decrease-contrast-shortcut',
+            this.settings,
+            Meta.KeyBindingFlags.NONE,
+            Shell.ActionMode.ALL,
+            this.decreaseContrast.bind(this)
+        );
     }
 
     removeKeyboardShortcuts() {
         brightnessLog(this.settings, 'Remove keyboard shortcuts');
         Main.wm.removeKeybinding('increase-brightness-shortcut');
         Main.wm.removeKeybinding('decrease-brightness-shortcut');
+        Main.wm.removeKeybinding('increase-contrast-shortcut');
+        Main.wm.removeKeybinding('decrease-contrast-shortcut');
     }
 }

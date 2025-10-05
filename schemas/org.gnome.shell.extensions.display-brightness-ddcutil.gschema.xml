@@ -57,6 +57,14 @@
       <default><![CDATA[['<Control>XF86MonBrightnessDown']]]></default>
       <summary>Decrease Brightness Shortcut</summary>
     </key>
+    <key type="as" name="increase-contrast-shortcut">
+      <default><![CDATA[['<Shift>XF86MonBrightnessUp']]]></default>
+      <summary>Increase Contrast Shortcut</summary>
+    </key>
+    <key type="as" name="decrease-contrast-shortcut">
+      <default><![CDATA[['<Shift>XF86MonBrightnessDown']]]></default>
+      <summary>Decrease Contrast Shortcut</summary>
+    </key>
     <key type="d" name="step-change-keyboard">
       <range min="1" max="100" />
       <default>2</default>
@@ -87,6 +95,27 @@
     <key type="b" name="vcp-6b">
       <default>false</default>
       <summary>Use VCP code 6B</summary>
+    </key>
+    <key type="b" name="show-contrast-sliders">
+      <default>false</default>
+      <summary>Show contrast sliders</summary>
+    </key>
+    <key type="b" name="show-contrast-indicator">
+      <default>false</default>
+      <summary>Show contrast indicator in system tray</summary>
+    </key>
+    <key type="b" name="vcp-12">
+      <default>true</default>
+      <summary>Use VCP code 12 for contrast</summary>
+    </key>
+    <key type="b" name="contrast-auto-detect-min">
+      <default>true</default>
+      <summary>Auto-detect minimum contrast value</summary>
+    </key>
+    <key type="d" name="contrast-manual-min">
+      <range min="0" max="100" />
+      <default>0</default>
+      <summary>Manual minimum contrast value (used when auto-detection is disabled)</summary>
     </key>
     <key type="b" name="allow-zero-brightness">
       <default>false</default>
