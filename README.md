@@ -1,5 +1,8 @@
 Display Brightness Slider for Gnome Shell
 
+> [!NOTE]
+> This is a fork of [daitj/gnome-display-brightness-ddcutil](https://github.com/daitj/gnome-display-brightness-ddcutil) that adds **external monitor contrast control** (DDC/CI VCP code 12): per-display contrast sliders, a contrast indicator you can scroll to adjust, and dedicated keyboard shortcuts.
+
 ![screenshot](screenshot.jpg)
 
 - [Setup ddcutil](#setup-ddcutil)
