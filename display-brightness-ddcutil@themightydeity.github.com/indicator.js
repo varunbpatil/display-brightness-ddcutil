@@ -13,8 +13,7 @@ import {Slider} from 'resource:///org/gnome/shell/ui/slider.js';
 import * as Convenience from './convenienceExt.js';
 
 const {
-    brightnessLog,
-    sliderValuePercentFixed
+    brightnessLog
 } = Convenience;
 
 function decycle(obj, stack = []) {
@@ -57,11 +56,11 @@ function sliderScrollEvent(actor, event) {
 }
 
 function sliderValueChangeCommon(item) {
-    const brightness = sliderValuePercentFixed(item.ValueSlider.value);
-    item.ValueLabel.text = brightness.toString();
-    item.emit('slider-change', brightness);
+    const value = item._SliderValueToActual(item.ValueSlider.value);
+    item.ValueLabel.text = value.toString();
+    item.emit('slider-change', value);
     if (item._onSliderChange)
-        item._onSliderChange(item, brightness);
+        item._onSliderChange(item, value);
 
     if (item._settings.get_boolean('show-osd') && !item._hideOSD) {
         let displayName = null;
@@ -71,13 +70,13 @@ function sliderValueChangeCommon(item) {
         let osdLabel = displayName;
         if (item._settings.get_boolean('show-value-label')) {
             if (displayName !== null)
-                osdLabel = `${displayName} ${brightness}`;
+                osdLabel = `${displayName} ${value}`;
             else
-                osdLabel = `${brightness}`;
+                osdLabel = `${value}`;
         }
 
         Main.osdWindowManager.show(
-            new Gio.ThemedIcon({name: 'display-brightness-symbolic'}), 
+            new Gio.ThemedIcon({name: item._iconName ?? 'display-brightness-symbolic'}), 
             osdLabel,
             Array.from({ 
                 length: Main.layoutManager.monitors.length 
@@ -139,6 +138,44 @@ export const StatusAreaBrightnessMenu = GObject.registerClass({
     }
 });
 
+export const StatusAreaContrastMenu = GObject.registerClass({
+    GType: 'StatusAreaContrastMenu',
+    Signals: {
+        'value-up': {param_types: [GObject.TYPE_DOUBLE]},
+        'value-down': {param_types: [GObject.TYPE_DOUBLE]},
+    },
+}, class StatusAreaContrastMenu extends PanelMenu.Button {
+    _init(settings) {
+        super._init(0.0);
+        this._settings = settings;
+        this._icon = new St.Icon({icon_name: 'preferences-color-symbolic', style_class: 'system-status-icon'});
+        this._iconVisible = true;
+        this.add_child(this._icon);
+        this.connect('scroll-event', this._scrollContrast.bind(this));
+    }
+
+    _scrollContrast(actor, event) {
+        const stepChange = this._settings.get_double('step-change-keyboard') / 100;
+        const direction = event.get_scroll_direction();
+        if (direction === Clutter.ScrollDirection.UP) {
+            this.emit('value-up', stepChange);
+        } else if (direction === Clutter.ScrollDirection.DOWN) {
+            this.emit('value-down', stepChange);
+        }
+        return Clutter.EVENT_STOP;
+    }
+
+    indicatorVisibility(visible) {
+        if (!visible && this._iconVisible) {
+            this.remove_child(this._icon);
+            this._iconVisible = false;
+        } else if (visible && !this._iconVisible) {
+            this.add_child(this._icon);
+            this._iconVisible = true;
+        }
+    }
+});
+
 export const SystemMenuBrightnessMenu = GObject.registerClass({
     GType: 'SystemMenuBrightnessMenu',
     Signals: {'value-up': {}, 'value-down': {}},
@@ -197,6 +234,46 @@ export const SystemMenuBrightnessMenu = GObject.registerClass({
     }
 });
 
+export const SystemMenuContrastMenu = GObject.registerClass({
+    GType: 'SystemMenuContrastMenu',
+    Signals: {
+        'value-up': {param_types: [GObject.TYPE_DOUBLE]},
+        'value-down': {param_types: [GObject.TYPE_DOUBLE]},
+    },
+}, class SystemMenuContrastMenu extends QuickSettings.SystemIndicator {
+    _init(settings) {
+        super._init();
+        this._settings = settings;
+        this._indicator = this._addIndicator();
+        this._indicator.icon_name = 'preferences-color-symbolic';
+        this._indicator.visible = !settings.get_boolean('hide-system-indicator');
+        this.connect('scroll-event', this._scrollContrast.bind(this));
+        this.connect('destroy', this._onDestroy.bind(this));
+    }
+
+    _scrollContrast(actor, event) {
+        const stepChange = this._settings.get_double('step-change-keyboard') / 100;
+        const direction = event.get_scroll_direction();
+        if (direction === Clutter.ScrollDirection.UP) {
+            this.emit('value-up', stepChange);
+        } else if (direction === Clutter.ScrollDirection.DOWN) {
+            this.emit('value-down', stepChange);
+        }
+        return Clutter.EVENT_STOP;
+    }
+
+    indicatorVisibility(visible) {
+        if (!this._settings.get_boolean('hide-system-indicator'))
+            this._indicator.visible = visible;
+        else
+            this._indicator.visible = false;
+    }
+
+    _onDestroy() {
+        brightnessLog(this._settings, 'Destroying contrast indicator');
+    }
+});
+
 export const SingleMonitorMenuItem = GObject.registerClass({
     GType: 'SingleMonitorMenuItem',
 }, class SingleMonitorMenuItem extends PopupMenu.PopupBaseMenuItem {
@@ -216,15 +293,20 @@ export const SingleMonitorMenuItem = GObject.registerClass({
 });
 
 export const SingleMonitorSliderAndValueForStatusAreaMenu = class SingleMonitorSliderAndValue extends PopupMenu.PopupMenuSection {
-    constructor(settings, displayName, currentValue, onSliderChange) {
+    constructor(settings, displayName, currentValue, onSliderChange, minValue = 0, maxValue = 100, iconName = 'display-brightness-symbolic') {
         super();
         this._settings = settings;
         this._displayName = displayName;
+        /* the value range (e.g. contrast minimum/maximum) the slider is mapped to */
+        this._minValue = minValue;
+        this._maxValue = maxValue;
+        this._iconName = iconName;
         this._currentValue = currentValue;
         this._onSliderChange = onSliderChange;
         /* OSD is never shown by default */
         this._hideOSD = true;
         this.__hideOSDBackup = true;
+        this.displayName = displayName;
         this._init();
     }
 
@@ -236,7 +318,7 @@ export const SingleMonitorSliderAndValueForStatusAreaMenu = class SingleMonitorS
         });
         this.ValueSlider = new Slider(this._currentValue);
         this.ValueSlider.connect('notify::value', this._SliderChange.bind(this));
-        this.ValueLabel = new St.Label({text: sliderValuePercentFixed(this._currentValue).toString()});
+        this.ValueLabel = new St.Label({text: this._SliderValueToActual(this._currentValue).toString()});
         const valueSliderBin = new St.Bin({
             style_class: 'display-brightness-ddcutil-monitor-slider-bin-system-menu',
             child: this.ValueSlider,
@@ -271,6 +353,11 @@ export const SingleMonitorSliderAndValueForStatusAreaMenu = class SingleMonitorS
         this.ValueSlider.value = newValue / 100;
     }
 
+    _SliderValueToActual(sliderValue) {
+        /* map the normalized slider position to the actual value range */
+        return Math.round(this._minValue + sliderValue * (this._maxValue - this._minValue));
+    }
+
     _SliderChange() {
         brightnessLog(this._settings, `StatusArea _SliderChange event ${this.ValueSlider.value}`) 
         sliderValueChangeCommon(this);
@@ -289,6 +376,15 @@ export const SingleMonitorSliderAndValueForQuickSettingsSubMenu = GObject.regist
         'current-value': GObject.ParamSpec.double('current-value', 'current-value', 'current-value',
             GObject.ParamFlags.READWRITE,
             0, 1, 1),
+        'icon-name': GObject.ParamSpec.string('icon-name', 'icon-name', 'icon-name',
+            GObject.ParamFlags.READWRITE,
+            'display-brightness-symbolic'),
+        'min-value': GObject.ParamSpec.double('min-value', 'min-value', 'min-value',
+            GObject.ParamFlags.READWRITE,
+            0, 100, 0),
+        'max-value': GObject.ParamSpec.double('max-value', 'max-value', 'max-value',
+            GObject.ParamFlags.READWRITE,
+            0, 100, 100),
     },
     Signals: {
         'slider-change': {
@@ -298,11 +394,14 @@ export const SingleMonitorSliderAndValueForQuickSettingsSubMenu = GObject.regist
 }, class SingleMonitorSliderAndValueForQuickSettingsSubMenu extends PopupMenu.PopupImageMenuItem {
     _init(params) {
         super._init(
-            "", 'display-brightness-symbolic', {}
+            "", params['icon-name'] ?? 'display-brightness-symbolic', {}
         );
         this.settings = params.settings
         this.display_name = params['display-name']
         this.current_value = params['current-value']
+        this._minValue = params['min-value'] ?? 0;
+        this._maxValue = params['max-value'] ?? 100;
+        this._iconName = params['icon-name'] ?? 'display-brightness-symbolic';
 
         /* OSD is never shown by default */
         this._hideOSD = true;
@@ -321,7 +420,7 @@ export const SingleMonitorSliderAndValueForQuickSettingsSubMenu = GObject.regist
         });
         if (this.settings.get_boolean('show-display-name'))
             this.add_child(this.NameContainer);
-        this.ValueLabel = new St.Label({text: sliderValuePercentFixed(this.current_value).toString()});
+        this.ValueLabel = new St.Label({text: this._SliderValueToActual(this.current_value).toString()});
         this.add_child(this.ValueSlider);
 
         /* for compatibility in other places */
@@ -350,6 +449,11 @@ export const SingleMonitorSliderAndValueForQuickSettingsSubMenu = GObject.regist
         this.ValueSlider.value = newValue / 100;
     }
 
+    _SliderValueToActual(sliderValue) {
+        /* map the normalized slider position to the actual value range */
+        return Math.round(this._minValue + sliderValue * (this._maxValue - this._minValue));
+    }
+
     _SliderChange() {
         brightnessLog(this._settings, `QuickSettings submenu _SliderChange event ${this.ValueSlider.value}`) 
         sliderValueChangeCommon(this);
@@ -369,6 +473,15 @@ export const SingleMonitorSliderAndValueForQuickSettings = GObject.registerClass
         'current-value': GObject.ParamSpec.double('current-value', 'current-value', 'current-value',
             GObject.ParamFlags.READWRITE,
             0, 1, 1),
+        'icon-name': GObject.ParamSpec.string('icon-name', 'icon-name', 'icon-name',
+            GObject.ParamFlags.READWRITE,
+            'display-brightness-symbolic'),
+        'min-value': GObject.ParamSpec.double('min-value', 'min-value', 'min-value',
+            GObject.ParamFlags.READWRITE,
+            0, 100, 0),
+        'max-value': GObject.ParamSpec.double('max-value', 'max-value', 'max-value',
+            GObject.ParamFlags.READWRITE,
+            0, 100, 100),
     },
     Signals: {
         'slider-change': {
@@ -379,8 +492,11 @@ export const SingleMonitorSliderAndValueForQuickSettings = GObject.registerClass
     _init(params) {
         super._init({
             ...params,
-            iconName: 'display-brightness-symbolic',
+            iconName: params['icon-name'] ?? 'display-brightness-symbolic',
         });
+        this._minValue = params['min-value'] ?? 0;
+        this._maxValue = params['max-value'] ?? 100;
+        this._iconName = params['icon-name'] ?? 'display-brightness-symbolic';
         /* OSD is never shown by default */
         this._hideOSD = true;
         this.__hideOSDBackup = true;
@@ -397,7 +513,7 @@ export const SingleMonitorSliderAndValueForQuickSettings = GObject.registerClass
         this.ValueLabel = new St.Label({
             y_align: Clutter.ActorAlign.CENTER,
             style: 'font-size: 12px; font-weight: normal;',
-            text: sliderValuePercentFixed(this.current_value).toString(),
+            text: this._SliderValueToActual(this.current_value).toString(),
         });
         /* for compatibility in other places */
         this.ValueSlider = this.slider;
@@ -421,6 +537,11 @@ export const SingleMonitorSliderAndValueForQuickSettings = GObject.registerClass
 
     changeValue(newValue) {
         this.slider.value = newValue / 100;
+    }
+
+    _SliderValueToActual(sliderValue) {
+        /* map the normalized slider position to the actual value range */
+        return Math.round(this._minValue + sliderValue * (this._maxValue - this._minValue));
     }
 
     _SliderChange() {

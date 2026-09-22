@@ -94,6 +94,26 @@ It automatically supports multiple displays detected by
 
 `ddcutil detect`
 
+## External monitor contrast (VCP 12)
+
+Besides brightness this extension can control the **contrast** of external monitors
+through DDC/CI VCP code 12 (`ddcutil getvcp 12` / `ddcutil setvcp 12 <value>`).
+
+Contrast controls are off by default and can be enabled from the extension's settings:
+
+- **Show Contrast Sliders** — adds a contrast slider for every external display. The
+  slider shows the actual contrast value (e.g. 20-100) of that display.
+- **Show Contrast Indicator** — shows a contrast icon in the system area; scroll over
+  it to adjust the contrast of all external displays at once.
+- **Increase/Decrease Contrast shortcuts** — by default `Shift + Brightness Up/Down`
+  (the step size is the same `Step Change %` used by the brightness shortcuts).
+
+Some displays refuse contrast values below their own minimum. When that happens the
+extension does **not** show an error: it silently reads back the lowest value the
+display actually accepted and uses that as the new minimum for the slider. You can
+also pre-set a floor in `Advanced settings` > `Minimum Contrast` if you know your
+display's minimum in advance.
+
 
 ## Installation
 

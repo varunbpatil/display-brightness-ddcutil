@@ -57,6 +57,14 @@
       <default><![CDATA[['<Control>XF86MonBrightnessDown']]]></default>
       <summary>Decrease Brightness Shortcut</summary>
     </key>
+    <key type="as" name="increase-contrast-shortcut">
+      <default><![CDATA[['<Shift>XF86MonBrightnessUp']]]></default>
+      <summary>Increase Contrast Shortcut</summary>
+    </key>
+    <key type="as" name="decrease-contrast-shortcut">
+      <default><![CDATA[['<Shift>XF86MonBrightnessDown']]]></default>
+      <summary>Decrease Contrast Shortcut</summary>
+    </key>
     <key type="d" name="step-change-keyboard">
       <range min="1" max="100" />
       <default>2</default>
@@ -82,6 +90,23 @@
     <key type="b" name="vcp-6b">
       <default>false</default>
       <summary>Use VCP code 6B</summary>
+    </key>
+    <key type="b" name="show-contrast-sliders">
+      <default>false</default>
+      <summary>Enables the contrast sliders for external displays</summary>
+    </key>
+    <key type="b" name="show-contrast-indicator">
+      <default>false</default>
+      <summary>Shows a contrast indicator in the system area that adjusts contrast on scroll</summary>
+    </key>
+    <key type="b" name="vcp-12">
+      <default>true</default>
+      <summary>Use VCP code 12 for contrast</summary>
+    </key>
+    <key type="d" name="contrast-min">
+      <range min="0" max="100" />
+      <default>0</default>
+      <summary>Lowest contrast value (0-100) that the display should be sent. Some displays refuse values below their own minimum; in that case this setting is raised automatically to what the display actually accepts.</summary>
     </key>
     <key type="b" name="allow-zero-brightness">
       <default>false</default>

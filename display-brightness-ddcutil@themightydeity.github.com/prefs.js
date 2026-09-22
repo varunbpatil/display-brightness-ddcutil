@@ -15,6 +15,8 @@ const PrefsWidget = GObject.registerClass({
         'only_all_slider_row',
         'show_value_label_row',
         'show_display_name_row',
+        'show_contrast_sliders_row',
+        'show_contrast_indicator_row',
         'show_osd_row',
         'button_location_combo_row',
         'sub_menu_row',
@@ -23,12 +25,16 @@ const PrefsWidget = GObject.registerClass({
         'position_system_menu_row',
         'increase_shortcut_button',
         'decrease_shortcut_button',
+        'increase_contrast_shortcut_button',
+        'decrease_contrast_shortcut_button',
         'step_keyboard_row',
         'ddcutil_binary_path_row',
         'sleep_multiplier_row',
         'vcp_code_list_expander',
         'vcp_code_row_6b',
         'vcp_code_row_10',
+        'vcp_code_row_12',
+        'contrast_min_row',
         'ddcutil_additional_args_row',
         'allow_zero_brightness_row',
         'disable_display_state_check_row',
@@ -74,6 +80,20 @@ const PrefsWidget = GObject.registerClass({
         );
 
         this.settings.bind(
+            'show-contrast-sliders',
+            this._show_contrast_sliders_row,
+            'active',
+            Gio.SettingsBindFlags.DEFAULT
+        );
+
+        this.settings.bind(
+            'show-contrast-indicator',
+            this._show_contrast_indicator_row,
+            'active',
+            Gio.SettingsBindFlags.DEFAULT
+        );
+
+        this.settings.bind(
             'show-osd',
             this._show_osd_row,
             'active',
@@ -107,6 +127,7 @@ const PrefsWidget = GObject.registerClass({
         this._ddcutil_binary_path_row.set_text(this.settings.get_string('ddcutil-binary-path'));
         this._ddcutil_additional_args_row.set_text(this.settings.get_string('ddcutil-additional-args'));
         this._sleep_multiplier_row.value = this.settings.get_double('ddcutil-sleep-multiplier');
+        this._contrast_min_row.value = this.settings.get_double('contrast-min');
 
         this.settings.bind(
             'vcp-10',
@@ -117,6 +138,12 @@ const PrefsWidget = GObject.registerClass({
         this.settings.bind(
             'vcp-6b',
             this._vcp_code_row_6b,
+            'active',
+            Gio.SettingsBindFlags.DEFAULT
+        );
+        this.settings.bind(
+            'vcp-12',
+            this._vcp_code_row_12,
             'active',
             Gio.SettingsBindFlags.DEFAULT
         );
@@ -158,6 +185,22 @@ const PrefsWidget = GObject.registerClass({
             this.settings.set_strv('decrease-brightness-shortcut', [this._decrease_shortcut_button.keybinding]);
         });
         this._decrease_shortcut_button.keybinding = this.settings.get_strv('decrease-brightness-shortcut')[0];
+
+        this.settings.connect('changed::increase-contrast-shortcut', () => {
+            this._increase_contrast_shortcut_button.keybinding = this.settings.get_strv('increase-contrast-shortcut')[0];
+        });
+        this._increase_contrast_shortcut_button.connect('notify::keybinding', () => {
+            this.settings.set_strv('increase-contrast-shortcut', [this._increase_contrast_shortcut_button.keybinding]);
+        });
+        this._increase_contrast_shortcut_button.keybinding = this.settings.get_strv('increase-contrast-shortcut')[0];
+
+        this.settings.connect('changed::decrease-contrast-shortcut', () => {
+            this._decrease_contrast_shortcut_button.keybinding = this.settings.get_strv('decrease-contrast-shortcut')[0];
+        });
+        this._decrease_contrast_shortcut_button.connect('notify::keybinding', () => {
+            this.settings.set_strv('decrease-contrast-shortcut', [this._decrease_contrast_shortcut_button.keybinding]);
+        });
+        this._decrease_contrast_shortcut_button.keybinding = this.settings.get_strv('decrease-contrast-shortcut')[0];
 
         this._position_system_indicator_row.sensitive = !this.settings.get_boolean('hide-system-indicator');
         this.settings.connect('changed::hide-system-indicator', () => {
@@ -267,6 +310,10 @@ const PrefsWidget = GObject.registerClass({
 
     onSleepMultiplierValueChanged() {
         this.settings.set_double('ddcutil-sleep-multiplier', this._sleep_multiplier_row.value);
+    }
+
+    onContrastMinValueChanged() {
+        this.settings.set_double('contrast-min', this._contrast_min_row.value);
     }
 }
 );
